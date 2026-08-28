@@ -20,6 +20,7 @@ To build from source instead, see [Building](#building) below.
 ## Features
 
 - Mount pCloud storage as a FUSE filesystem
+- Local folder sync pairs (two-way, upload-only, or download-only)
 - Encrypted folder support (Crypto)
 - Background daemon mode with IPC control
 - Secure password handling with automatic zeroization
@@ -218,7 +219,7 @@ pcloud-cli stop
 
 - `pcloud-cli start [PATH]` — daemonizes, mounts the filesystem, listens for IPC.
 - `pcloud-cli stop` — sends `Finalize`; daemon waits for sync to finish and exits.
-- Commands that need a running daemon (`status`, `crypto *`, `backup *`) auto-spawn
+- Commands that need a running daemon (`status`, `crypto *`, `backup *`, `sync *`) auto-spawn
   `pcloud-cli start` when no daemon is alive **and** saved credentials exist.
 
 The daemon creates:
@@ -248,6 +249,10 @@ The daemon creates:
 | `pcloud-cli backup status [<ID>]`      | Backup status (optional sync id filter)      |
 | `pcloud-cli backup stop-device`        | Stop all backups on the current device       |
 | `pcloud-cli backup root-name`          | Print the backup root folder name            |
+| `pcloud-cli sync add <LOCAL> <REMOTE> [--type full\|upload\|download]` | Add a sync pair (default: full two-way) |
+| `pcloud-cli sync list`                 | List configured sync pairs                   |
+| `pcloud-cli sync remove <ID>`          | Remove a sync pair (keeps files both sides)  |
+| `pcloud-cli sync set-type <ID> --type <TYPE>` | Change a sync pair's direction in place |
 | `pcloud-cli doctor`                    | Dependency and environment diagnostics       |
 | `pcloud-cli completions <SHELL>`       | Print a shell completion script to stdout    |
 
