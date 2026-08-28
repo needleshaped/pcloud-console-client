@@ -211,6 +211,9 @@ impl PCloudClient {
 
         // Safety: We checked for null.
         let list: &psync_folder_list_t = unsafe { &*list_ptr };
+        // foldercnt's bindgen width is platform-dependent (u32 or usize), so the
+        // cast is required on some targets and a no-op on others.
+        #[allow(clippy::unnecessary_cast)]
         let mut out = Vec::with_capacity(list.foldercnt as usize);
 
         for i in 0..list.foldercnt {
