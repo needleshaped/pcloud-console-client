@@ -54,7 +54,7 @@ use crate::error::{DaemonError, PCloudError, Result};
 use crate::security::SecurePassword;
 use crate::wrapper::{
     ActivityEntry, BackupId, BackupInfo, BackupStatusInfo, DashboardSnapshot, PCloudClient,
-    StatusSnapshot,
+    StatusSnapshot, SyncFolder, SyncType,
 };
 
 /// Commands that can be sent to the daemon.
@@ -153,6 +153,33 @@ pub enum DaemonCommand {
     /// Print the backup root folder name for this device.
     BackupRootName,
 
+    /// Add a sync pair between a local folder and a remote pCloud folder.
+    SyncAdd {
+        /// Local folder path.
+        local_path: String,
+        /// Remote pCloud folder path (e.g. "/Documents").
+        remote_path: String,
+        /// Sync direction.
+        sync_type: SyncType,
+    },
+
+    /// Remove a sync pair by sync id (does not delete files).
+    SyncRemove {
+        /// Sync id of the pair to remove.
+        sync_id: u32,
+    },
+
+    /// List configured sync pairs.
+    SyncList,
+
+    /// Change the direction of an existing sync pair.
+    SyncSetType {
+        /// Sync id of the pair to change.
+        sync_id: u32,
+        /// New sync direction.
+        sync_type: SyncType,
+    },
+
     /// Fetch a full dashboard snapshot (status + account info) in one
     /// round-trip. Drives the TUI dashboard when it runs as a pure IPC client.
     StatusFull,
@@ -239,6 +266,26 @@ impl std::fmt::Debug for DaemonCommand {
                 .field("sync_id", sync_id)
                 .finish(),
             DaemonCommand::BackupRootName => write!(f, "BackupRootName"),
+            DaemonCommand::SyncAdd {
+                local_path,
+                remote_path,
+                sync_type,
+            } => f
+                .debug_struct("SyncAdd")
+                .field("local_path", local_path)
+                .field("remote_path", remote_path)
+                .field("sync_type", sync_type)
+                .finish(),
+            DaemonCommand::SyncRemove { sync_id } => f
+                .debug_struct("SyncRemove")
+                .field("sync_id", sync_id)
+                .finish(),
+            DaemonCommand::SyncList => write!(f, "SyncList"),
+            DaemonCommand::SyncSetType { sync_id, sync_type } => f
+                .debug_struct("SyncSetType")
+                .field("sync_id", sync_id)
+                .field("sync_type", sync_type)
+                .finish(),
             DaemonCommand::StatusFull => write!(f, "StatusFull"),
             DaemonCommand::ActivitySince { cursor } => f
                 .debug_struct("ActivitySince")
@@ -278,6 +325,10 @@ impl std::fmt::Display for DaemonCommand {
             DaemonCommand::BackupList => write!(f, "BackupList"),
             DaemonCommand::BackupStatus { .. } => write!(f, "BackupStatus"),
             DaemonCommand::BackupRootName => write!(f, "BackupRootName"),
+            DaemonCommand::SyncAdd { .. } => write!(f, "SyncAdd"),
+            DaemonCommand::SyncRemove { .. } => write!(f, "SyncRemove"),
+            DaemonCommand::SyncList => write!(f, "SyncList"),
+            DaemonCommand::SyncSetType { .. } => write!(f, "SyncSetType"),
             DaemonCommand::StatusFull => write!(f, "StatusFull"),
             DaemonCommand::ActivitySince { .. } => write!(f, "ActivitySince"),
             DaemonCommand::Pause => write!(f, "Pause"),
@@ -334,6 +385,15 @@ pub enum DaemonResponse {
 
     /// Response to `BackupRootName` - the device backup root folder name.
     BackupRootName(String),
+
+    /// Response to `SyncAdd` - the new sync pair's sync id.
+    SyncAdded {
+        /// Sync id of the newly created sync pair.
+        sync_id: u32,
+    },
+
+    /// Response to `SyncList` - the configured sync pairs.
+    SyncList(Vec<SyncFolder>),
 
     /// Response to `StatusFull` - a full dashboard snapshot.
     ///
@@ -396,6 +456,16 @@ impl std::fmt::Display for DaemonResponse {
                 write!(f, "device={}, backups={}", s.device_name, s.backups.len())
             }
             DaemonResponse::BackupRootName(name) => write!(f, "{}", name),
+            DaemonResponse::SyncAdded { sync_id } => {
+                write!(f, "Sync pair created (sync id: {})", sync_id)
+            }
+            DaemonResponse::SyncList(list) => {
+                if list.is_empty() {
+                    write!(f, "No sync pairs configured")
+                } else {
+                    write!(f, "{} sync pair(s) configured", list.len())
+                }
+            }
             DaemonResponse::StatusFull(s) => {
                 write!(
                     f,
@@ -819,6 +889,45 @@ fn process_command(mut command: DaemonCommand, ctx: &DaemonContext) -> DaemonRes
         DaemonCommand::BackupRootName => match client.lock() {
             Ok(c) => match c.backup_root_name() {
                 Ok(name) => DaemonResponse::BackupRootName(name),
+                Err(e) => DaemonResponse::Error(e.to_string()),
+            },
+            Err(e) => DaemonResponse::Error(format!("Failed to acquire client lock: {}", e)),
+        },
+
+        DaemonCommand::SyncAdd {
+            ref local_path,
+            ref remote_path,
+            sync_type,
+        } => match client.lock() {
+            Ok(mut c) => match c.add_sync_by_path(local_path, remote_path, sync_type) {
+                Ok(sync_id) => DaemonResponse::SyncAdded { sync_id },
+                Err(e) => DaemonResponse::Error(e.to_string()),
+            },
+            Err(e) => DaemonResponse::Error(format!("Failed to acquire client lock: {}", e)),
+        },
+
+        DaemonCommand::SyncRemove { sync_id } => match client.lock() {
+            Ok(mut c) => match c.remove_sync(sync_id) {
+                Ok(()) => DaemonResponse::OkWithMessage(format!("Sync pair {} removed", sync_id)),
+                Err(e) => DaemonResponse::Error(e.to_string()),
+            },
+            Err(e) => DaemonResponse::Error(format!("Failed to acquire client lock: {}", e)),
+        },
+
+        DaemonCommand::SyncList => match client.lock() {
+            Ok(c) => match c.list_syncs() {
+                Ok(list) => DaemonResponse::SyncList(list),
+                Err(e) => DaemonResponse::Error(e.to_string()),
+            },
+            Err(e) => DaemonResponse::Error(format!("Failed to acquire client lock: {}", e)),
+        },
+
+        DaemonCommand::SyncSetType { sync_id, sync_type } => match client.lock() {
+            Ok(mut c) => match c.change_sync_type(sync_id, sync_type) {
+                Ok(()) => DaemonResponse::OkWithMessage(format!(
+                    "Sync pair {} set to {}",
+                    sync_id, sync_type
+                )),
                 Err(e) => DaemonResponse::Error(e.to_string()),
             },
             Err(e) => DaemonResponse::Error(format!("Failed to acquire client lock: {}", e)),
@@ -1392,6 +1501,95 @@ mod tests {
         assert_eq!(
             format!("{}", DaemonCommand::BackupRootName),
             "BackupRootName"
+        );
+    }
+
+    // ========================================================================
+    // Sync IPC tests
+    // ========================================================================
+
+    #[test]
+    fn test_sync_command_roundtrip() {
+        use crate::wrapper::SyncType;
+
+        let commands = vec![
+            DaemonCommand::SyncAdd {
+                local_path: "/tmp/foo".to_string(),
+                remote_path: "/Documents".to_string(),
+                sync_type: SyncType::Full,
+            },
+            DaemonCommand::SyncAdd {
+                local_path: "/tmp/up".to_string(),
+                remote_path: "/Up".to_string(),
+                sync_type: SyncType::UploadOnly,
+            },
+            DaemonCommand::SyncRemove { sync_id: 42 },
+            DaemonCommand::SyncList,
+            DaemonCommand::SyncSetType {
+                sync_id: 7,
+                sync_type: SyncType::DownloadOnly,
+            },
+        ];
+        for cmd in commands {
+            let bytes = bincode::serialize(&cmd).expect("serialize");
+            let back: DaemonCommand = bincode::deserialize(&bytes).expect("deserialize");
+            assert_eq!(format!("{:?}", cmd), format!("{:?}", back));
+        }
+    }
+
+    #[test]
+    fn test_sync_response_roundtrip() {
+        use crate::wrapper::{SyncFolder, SyncType};
+        use std::path::PathBuf;
+
+        let folder = SyncFolder {
+            id: 1,
+            local_path: PathBuf::from("/tmp/x"),
+            remote_path: "/Documents/x".to_string(),
+            sync_type: SyncType::Full,
+        };
+
+        let responses = vec![
+            DaemonResponse::SyncAdded { sync_id: 5 },
+            DaemonResponse::SyncList(vec![folder]),
+            DaemonResponse::SyncList(Vec::new()),
+        ];
+        for resp in responses {
+            let bytes = bincode::serialize(&resp).expect("serialize");
+            let back: DaemonResponse = bincode::deserialize(&bytes).expect("deserialize");
+            assert_eq!(format!("{:?}", resp), format!("{:?}", back));
+        }
+    }
+
+    #[test]
+    fn test_sync_command_display() {
+        use crate::wrapper::SyncType;
+
+        assert_eq!(
+            format!(
+                "{}",
+                DaemonCommand::SyncAdd {
+                    local_path: "/tmp/foo".to_string(),
+                    remote_path: "/Documents".to_string(),
+                    sync_type: SyncType::Full,
+                }
+            ),
+            "SyncAdd"
+        );
+        assert_eq!(
+            format!("{}", DaemonCommand::SyncRemove { sync_id: 1 }),
+            "SyncRemove"
+        );
+        assert_eq!(format!("{}", DaemonCommand::SyncList), "SyncList");
+        assert_eq!(
+            format!(
+                "{}",
+                DaemonCommand::SyncSetType {
+                    sync_id: 1,
+                    sync_type: SyncType::Full,
+                }
+            ),
+            "SyncSetType"
         );
     }
 

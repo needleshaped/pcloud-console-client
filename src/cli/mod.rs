@@ -22,7 +22,7 @@ pub mod auth_prompt;
 pub use args::{
     default_mountpoint, resolve_mountpoint, AuthArgs, AuthOp, BackupArgs, BackupOp, Cli, Command,
     CompleteArgs, CompletionShell, CryptoArgs, CryptoOp, MountArgs, ServiceArgs, ServiceOp,
-    StartArgs,
+    StartArgs, SyncArgs, SyncOp, SyncTypeArg,
 };
 pub use auth_prompt::{
     print_cli_auth_help, prompt_auth_choice, prompt_confirm, prompt_confirm_by_name, prompt_token,

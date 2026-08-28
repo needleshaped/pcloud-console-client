@@ -40,6 +40,7 @@ fn help_long_flag_shows_subcommands() {
         .stdout(predicate::str::contains("status"))
         .stdout(predicate::str::contains("crypto"))
         .stdout(predicate::str::contains("backup"))
+        .stdout(predicate::str::contains("sync"))
         .stdout(predicate::str::contains("doctor"))
         .stdout(predicate::str::contains("tui"));
 }
@@ -292,6 +293,104 @@ fn backup_add_with_no_daemon_and_no_creds_errors() {
 }
 
 // ============================================================================
+// sync subcommand
+// ============================================================================
+
+#[test]
+fn sync_help_lists_all_operations() {
+    let mut cmd = pcloud_cmd();
+    cmd.args(["sync", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("add"))
+        .stdout(predicate::str::contains("list"))
+        .stdout(predicate::str::contains("remove"))
+        .stdout(predicate::str::contains("set-type"));
+}
+
+#[test]
+fn bare_sync_prints_help_to_stdout_and_exits_zero() {
+    let mut cmd = pcloud_cmd();
+    cmd.arg("sync")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Usage: pcloud-cli sync"))
+        .stdout(predicate::str::contains("add"))
+        .stdout(predicate::str::contains("set-type"));
+}
+
+#[test]
+fn sync_add_help_documents_paths_and_type() {
+    let mut cmd = pcloud_cmd();
+    cmd.args(["sync", "add", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("LOCAL_PATH"))
+        .stdout(predicate::str::contains("REMOTE_PATH"))
+        .stdout(predicate::str::contains("--type"));
+}
+
+#[test]
+fn sync_add_without_args_fails() {
+    let mut cmd = pcloud_cmd();
+    cmd.args(["sync", "add"]).assert().failure();
+}
+
+#[test]
+fn sync_add_with_local_path_only_fails() {
+    let mut cmd = pcloud_cmd();
+    cmd.args(["sync", "add", "/tmp/local"]).assert().failure();
+}
+
+#[test]
+fn sync_add_rejects_invalid_type() {
+    let mut cmd = pcloud_cmd();
+    cmd.args(["sync", "add", "/tmp/local", "/Remote", "--type", "sideways"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("full"))
+        .stderr(predicate::str::contains("upload"))
+        .stderr(predicate::str::contains("download"));
+}
+
+#[test]
+fn sync_remove_without_id_fails() {
+    let mut cmd = pcloud_cmd();
+    cmd.args(["sync", "remove"]).assert().failure();
+}
+
+#[test]
+fn sync_remove_rejects_non_numeric_id() {
+    let mut cmd = pcloud_cmd();
+    cmd.args(["sync", "remove", "abc"]).assert().failure();
+}
+
+#[test]
+fn sync_set_type_requires_id_and_type() {
+    let mut cmd = pcloud_cmd();
+    cmd.args(["sync", "set-type"]).assert().failure();
+
+    let mut cmd = pcloud_cmd();
+    cmd.args(["sync", "set-type", "3"]).assert().failure();
+}
+
+#[test]
+fn sync_add_with_no_daemon_and_no_creds_errors() {
+    use tempfile::TempDir;
+
+    // Throwaway HOME / XDG so we don't trip over real saved credentials.
+    let home_dir = TempDir::new().expect("tempdir");
+    let mut cmd = pcloud_cmd();
+    cmd.env("HOME", home_dir.path())
+        .env("XDG_DATA_HOME", home_dir.path().join("xdg-data"))
+        .env("XDG_CONFIG_HOME", home_dir.path().join("xdg-config"))
+        .env("XDG_CACHE_HOME", home_dir.path().join("xdg-cache"))
+        .args(["sync", "add", "/tmp/local", "/Remote"])
+        .assert()
+        .failure();
+}
+
+// ============================================================================
 // Error message quality
 // ============================================================================
 
@@ -406,6 +505,7 @@ fn complete_callback_emits_descriptions_for_subcommands() {
     // Every top-level subcommand should appear with its tab-separated description.
     for (value, description) in [
         ("backup", "Manage pCloud backups for the current device"),
+        ("sync", "Manage local folder sync pairs"),
         ("crypto", "Manage the Crypto folder"),
         ("mount", "Mount pCloud as a FUSE filesystem"),
     ] {

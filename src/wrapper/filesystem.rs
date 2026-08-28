@@ -59,6 +59,8 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::{FilesystemError, PCloudError, Result};
 use crate::ffi::raw;
 use crate::ffi::types::{
@@ -69,7 +71,7 @@ use crate::utils::cstring::{from_cstr_and_free, try_to_cstring};
 use super::client::PCloudClient;
 
 /// Type of synchronization for a sync folder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SyncType {
     /// Only download files from pCloud to local folder
     DownloadOnly,
@@ -111,7 +113,7 @@ impl std::fmt::Display for SyncType {
 }
 
 /// Information about a sync folder.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncFolder {
     /// Unique identifier for this sync
     pub id: u32,

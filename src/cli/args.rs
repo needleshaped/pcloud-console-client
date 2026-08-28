@@ -108,6 +108,9 @@ pub enum Command {
     /// Manage pCloud backups for the current device.
     Backup(BackupArgs),
 
+    /// Manage local folder sync pairs (add / list / remove / set-type).
+    Sync(SyncArgs),
+
     /// Install / remove a service that starts pCloud on boot or login.
     Service(ServiceArgs),
 
@@ -319,6 +322,64 @@ pub enum BackupOp {
     },
     /// Print the backup root folder name for this device.
     RootName,
+}
+
+// ============================================================================
+// sync
+// ============================================================================
+
+/// Arguments for the `sync` subcommand group.
+///
+/// Bare `pcloud-cli sync` prints the group's help and exits cleanly.
+#[derive(Args, Debug, Clone)]
+pub struct SyncArgs {
+    #[command(subcommand)]
+    pub op: Option<SyncOp>,
+}
+
+/// Direction of a sync pair, as accepted on the command line.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncTypeArg {
+    /// Full bidirectional synchronization.
+    Full,
+    /// Only upload local changes to pCloud.
+    Upload,
+    /// Only download remote changes from pCloud.
+    Download,
+}
+
+/// Individual sync operations.
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum SyncOp {
+    /// Add a sync pair between a local folder and a pCloud folder.
+    Add {
+        /// Local folder to sync.
+        #[arg(value_name = "LOCAL_PATH", value_hint = ValueHint::DirPath)]
+        local_path: PathBuf,
+        /// Remote pCloud folder path (e.g. "/Documents").
+        #[arg(value_name = "REMOTE_PATH", value_hint = ValueHint::Other)]
+        remote_path: String,
+        /// Sync direction.
+        #[arg(long = "type", value_enum, default_value = "full")]
+        sync_type: SyncTypeArg,
+    },
+    /// List configured sync pairs.
+    List,
+    /// Remove a sync pair by sync id (does not delete files).
+    Remove {
+        /// Sync id of the pair to remove.
+        #[arg(value_hint = ValueHint::Other)]
+        id: u32,
+    },
+    /// Change the direction of an existing sync pair.
+    SetType {
+        /// Sync id of the pair to change.
+        #[arg(value_hint = ValueHint::Other)]
+        id: u32,
+        /// New sync direction.
+        #[arg(long = "type", value_enum)]
+        sync_type: SyncTypeArg,
+    },
 }
 
 // ============================================================================

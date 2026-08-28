@@ -13,6 +13,7 @@
 //! pcloud-cli status
 //! pcloud-cli crypto start|stop|status
 //! pcloud-cli backup add|list|remove|status|stop-device|root-name
+//! pcloud-cli sync   add|list|remove|set-type
 //! pcloud-cli tui
 //! pcloud-cli doctor
 //! ```
@@ -30,7 +31,8 @@ use secrecy::{ExposeSecret, SecretString};
 use console_client::cli::{
     print_cli_auth_help, prompt_auth_choice, prompt_confirm, prompt_token, resolve_mountpoint,
     AuthArgs, AuthChoice, AuthOp, BackupArgs, BackupOp, Cli, Command, CompleteArgs,
-    CompletionShell, CryptoArgs, CryptoOp, MountArgs, ServiceArgs, ServiceOp, StartArgs,
+    CompletionShell, CryptoArgs, CryptoOp, MountArgs, ServiceArgs, ServiceOp, StartArgs, SyncArgs,
+    SyncOp, SyncTypeArg,
 };
 use console_client::daemon::{
     is_daemon_running, DaemonClient, DaemonCommand, DaemonConfig, DaemonResponse,
@@ -45,7 +47,7 @@ use console_client::security::{prompt_for_password, resolve_auth_token, resolve_
 use console_client::utils::browser::{has_display, open_url};
 use console_client::utils::qrcode::{can_display_qr, generate_qr_code};
 use console_client::utils::terminal::{print_boxed, print_status, StatusIndicator};
-use console_client::wrapper::{PCloudClient, WebLoginConfig};
+use console_client::wrapper::{PCloudClient, SyncType, WebLoginConfig};
 use console_client::Result;
 
 /// Global shutdown flag for signal handling.
@@ -90,6 +92,8 @@ fn run(cli: Cli) -> Result<()> {
         Some(Command::Crypto(CryptoArgs { op: None })) => print_subcommand_help("crypto"),
         Some(Command::Backup(BackupArgs { op: Some(op) })) => run_backup_subcommand(op),
         Some(Command::Backup(BackupArgs { op: None })) => print_subcommand_help("backup"),
+        Some(Command::Sync(SyncArgs { op: Some(op) })) => run_sync_subcommand(op),
+        Some(Command::Sync(SyncArgs { op: None })) => print_subcommand_help("sync"),
         Some(Command::Service(ServiceArgs { op: Some(op) })) => run_service_subcommand(op),
         Some(Command::Service(ServiceArgs { op: None })) => print_subcommand_help("service"),
     }
@@ -767,6 +771,58 @@ fn backup_op_to_daemon_command(op: &BackupOp) -> DaemonCommand {
 }
 
 // ============================================================================
+// sync subcommands (auto-start daemon, send IPC)
+// ============================================================================
+
+fn run_sync_subcommand(op: SyncOp) -> Result<()> {
+    let config = DaemonConfig::default();
+    let daemon_client = DaemonClient::new(config.socket_path());
+
+    let cmd = sync_op_to_daemon_command(&op);
+
+    if !daemon_client.is_daemon_alive() {
+        ensure_daemon_running(&config, &daemon_client, false)?;
+    }
+
+    let response = daemon_client.send_command(cmd)?;
+    print_daemon_response(&response);
+    if matches!(response, DaemonResponse::Error(_)) {
+        return Err(PCloudError::Daemon(DaemonError::CommandFailed(
+            response.to_string(),
+        )));
+    }
+    Ok(())
+}
+
+fn sync_type_from_arg(arg: SyncTypeArg) -> SyncType {
+    match arg {
+        SyncTypeArg::Full => SyncType::Full,
+        SyncTypeArg::Upload => SyncType::UploadOnly,
+        SyncTypeArg::Download => SyncType::DownloadOnly,
+    }
+}
+
+fn sync_op_to_daemon_command(op: &SyncOp) -> DaemonCommand {
+    match op {
+        SyncOp::Add {
+            local_path,
+            remote_path,
+            sync_type,
+        } => DaemonCommand::SyncAdd {
+            local_path: local_path.to_string_lossy().into_owned(),
+            remote_path: remote_path.clone(),
+            sync_type: sync_type_from_arg(*sync_type),
+        },
+        SyncOp::List => DaemonCommand::SyncList,
+        SyncOp::Remove { id } => DaemonCommand::SyncRemove { sync_id: *id },
+        SyncOp::SetType { id, sync_type } => DaemonCommand::SyncSetType {
+            sync_id: *id,
+            sync_type: sync_type_from_arg(*sync_type),
+        },
+    }
+}
+
+// ============================================================================
 // TUI mode (default / explicit)
 // ============================================================================
 
@@ -1182,6 +1238,28 @@ fn print_daemon_response(response: &DaemonResponse) {
             }
         }
         DaemonResponse::BackupRootName(name) => println!("{}", name),
+        DaemonResponse::SyncAdded { sync_id } => {
+            println!("Sync pair created (sync id: {})", sync_id);
+        }
+        DaemonResponse::SyncList(list) => {
+            if list.is_empty() {
+                println!("No sync pairs configured.");
+            } else {
+                println!(
+                    "{:<6}  {:<40}  {:<32}  {:<13}",
+                    "ID", "Local Path", "Remote Path", "Type"
+                );
+                for s in list {
+                    println!(
+                        "{:<6}  {:<40}  {:<32}  {:<13}",
+                        s.id,
+                        s.local_path.display(),
+                        s.remote_path,
+                        s.sync_type
+                    );
+                }
+            }
+        }
         // Dashboard/auth responses are consumed by the TUI over IPC, not the
         // CLI's response printer; fall back to their Display form if seen.
         other @ (DaemonResponse::StatusFull(_)
@@ -1241,5 +1319,40 @@ mod tests {
 
         let cmd = backup_op_to_daemon_command(&BackupOp::Status { id: None });
         assert!(matches!(cmd, DaemonCommand::BackupStatus { sync_id: None }));
+    }
+
+    #[test]
+    fn test_sync_op_to_daemon_command_maps_correctly() {
+        let cmd = sync_op_to_daemon_command(&SyncOp::Add {
+            local_path: std::path::PathBuf::from("/tmp/x"),
+            remote_path: "/Documents".to_string(),
+            sync_type: SyncTypeArg::Upload,
+        });
+        assert!(matches!(
+            cmd,
+            DaemonCommand::SyncAdd {
+                ref local_path,
+                ref remote_path,
+                sync_type: SyncType::UploadOnly,
+            } if local_path == "/tmp/x" && remote_path == "/Documents"
+        ));
+
+        let cmd = sync_op_to_daemon_command(&SyncOp::List);
+        assert!(matches!(cmd, DaemonCommand::SyncList));
+
+        let cmd = sync_op_to_daemon_command(&SyncOp::Remove { id: 42 });
+        assert!(matches!(cmd, DaemonCommand::SyncRemove { sync_id: 42 }));
+
+        let cmd = sync_op_to_daemon_command(&SyncOp::SetType {
+            id: 7,
+            sync_type: SyncTypeArg::Full,
+        });
+        assert!(matches!(
+            cmd,
+            DaemonCommand::SyncSetType {
+                sync_id: 7,
+                sync_type: SyncType::Full,
+            }
+        ));
     }
 }
