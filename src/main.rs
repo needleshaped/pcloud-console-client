@@ -523,9 +523,17 @@ fn run_start_subcommand(args: StartArgs) -> Result<()> {
 
     // Capture the live file-event stream into a ring buffer so IPC clients (the
     // TUI) can poll recent activity. Status itself is polled on demand via
-    // `psync_get_status`, so the status callback stays a no-op.
+    // `psync_get_status`; the callback only logs status transitions so a
+    // supervised daemon is never silent about error states ("Invalid Token"
+    // used to be observable over IPC only, while the log showed a healthy start).
     let activity = std::sync::Arc::new(console_client::daemon::activity::ActivityLog::new());
-    register_status_callback(|_status| {});
+    let last_status = std::sync::atomic::AtomicU32::new(u32::MAX);
+    register_status_callback(move |status| {
+        let prev = last_status.swap(status.status, std::sync::atomic::Ordering::Relaxed);
+        if prev != status.status {
+            eprintln!("Status: {}", status_to_string(status.status));
+        }
+    });
     {
         let activity = activity.clone();
         register_event_callback(move |event_type, event_data| {
@@ -659,6 +667,14 @@ fn run_status_subcommand() -> Result<()> {
 
     let response = daemon_client.send_command(DaemonCommand::Status)?;
     print_daemon_response(&response);
+
+    // Name the engine state ("Invalid Token", "Offline", ...) - the boolean
+    // block above cannot distinguish "never logged in" from "token rejected".
+    if let Ok(DaemonResponse::StatusFull(snapshot)) =
+        daemon_client.send_command(DaemonCommand::StatusFull)
+    {
+        println!("Engine: {}", snapshot.status.status_str);
+    }
     Ok(())
 }
 

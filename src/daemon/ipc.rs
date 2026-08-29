@@ -1003,9 +1003,14 @@ fn process_command(mut command: DaemonCommand, ctx: &DaemonContext) -> DaemonRes
                     // Wait for completion in the background; on success pclsync
                     // sets the auth token itself. The client observes via polling
                     // StatusFull.
+                    // TODO: the engine-side wait is single-shot with a ~5-minute
+                    // window; a login completed after it expires goes nowhere.
+                    // Consider retrying the wait until a new AuthBeginWeb arrives.
                     let request_id = session.request_id.clone();
                     thread::spawn(move || {
-                        let _ = crate::wrapper::weblogin::wait_for_web_auth(&request_id);
+                        if let Err(e) = crate::wrapper::weblogin::wait_for_web_auth(&request_id) {
+                            eprintln!("Web login wait failed (login link no longer active): {e}");
+                        }
                     });
                     DaemonResponse::AuthWeb { url, qr }
                 }
