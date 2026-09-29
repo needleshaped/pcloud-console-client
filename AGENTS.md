@@ -396,6 +396,10 @@ git config core.hooksPath .githooks
 - [ ] New functionality has tests
 - [ ] Unsafe code is minimized and well-documented
 
+### Commit and Push
+
+- Commit and push only when asked - this overrides the global default: the fork's branch feeds an upstream PR
+
 ### Commit Messages
 
 - Follow the commit message guide in `COMMIT.md`
